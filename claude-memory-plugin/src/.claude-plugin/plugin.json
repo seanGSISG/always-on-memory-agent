@@ -1,6 +1,6 @@
 {
   "name": "claude-memory",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Always-on memory for Claude Code — automatically records sessions, extracts observations, consolidates insights, and injects relevant context.",
   "author": "always-on-memory-agent",
   "hooks": "./hooks/hooks.json",
@@ -8,7 +8,8 @@
     "./skills/memory-query",
     "./skills/memory-status",
     "./skills/memory-consolidate",
-    "./skills/memory-forget"
+    "./skills/memory-forget",
+    "./skills/memory-setup"
   ],
   "setup": "./scripts/setup.sh"
 }
