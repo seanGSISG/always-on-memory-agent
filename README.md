@@ -1,229 +1,301 @@
-<p align="center">
-  <img src="docs/gemini_flash_lite_agent_banner.jpeg" alt="Always-On Agent Memory Layer" width="100%">
-</p>
+# claude-memory
 
-# Always On Memory Agent
+Always-on memory for [Claude Code](https://docs.anthropic.com/en/docs/claude-code). Automatically records sessions, extracts structured observations via LLM, consolidates cross-session insights, and injects relevant context when you start a new session — so Claude remembers what you've been working on.
 
-**An always-on AI memory agent built with [Google ADK](https://google.github.io/adk-docs/) + Gemini 3.1 Flash-Lite**
+## What It Does
 
-Most AI agents have amnesia. They process information when asked, then forget everything. This project gives agents a persistent, evolving memory that runs 24/7 as a lightweight background process, continuously processing, consolidating, and connecting information.
+Every Claude Code session generates valuable context — architectural decisions, bug fixes, failed approaches, dependency quirks. Without memory, each session starts from scratch. `claude-memory` fixes that.
 
-No vector database. No embeddings. Just an LLM that reads, thinks, and writes structured memory.
+### The Memory Loop
 
-## The Problem
+```
+Session Start ──► Inject relevant memories into context
+       │
+  Work happens (tool calls, edits, searches recorded)
+       │
+  Session End ──► Extract observations via LLM (background)
+       │
+  Consolidate ──► Find cross-session patterns, resolve contradictions (background)
+       │
+  Next Session ──► Inject again, now with richer context
+```
 
-Current approaches to LLM memory fall short:
+### What Gets Remembered
 
-| Approach | Limitation |
-|---|---|
-| **Vector DB + RAG** | Passive. Embeds once, retrieves later. No active processing. |
-| **Conversation summary** | Loses detail over time. No cross-reference. |
-| **Knowledge graphs** | Expensive to build and maintain. |
+Observations are extracted with priority levels:
 
-The gap: No system actively consolidates information like a human brain does. Humans don't just store memories. During sleep, the brain replays, connects, and compresses information. This agent does the same thing.
+| Priority | Category | Examples |
+|----------|----------|----------|
+| **P1** | Critical | Architectural decisions with rationale, security-sensitive patterns |
+| **P2** | Important | Bug fixes with root causes, dependency quirks and workarounds |
+| **P3** | Useful | Code patterns/conventions, file relationships, test strategies |
+| **P4** | Minor | Failed approaches, dead ends, environment setup details |
+
+Each observation includes entities (files, functions, packages), topic tags, and an importance score that decays over time — so stale memories fade naturally while critical decisions persist.
 
 ## Architecture
 
-![Architecture Diagram](docs/architecture.png)
-
-Each agent has its own tools for reading/writing the memory store. The orchestrator routes incoming requests to the right specialist.
-
-## How It Works
-
-### 1. Ingest
-
-Feed the agent **any file** — text, images, audio, video, or PDFs. The **IngestAgent** uses Gemini's multimodal capabilities to extract structured information from all of them:
-
 ```
-Input: "Anthropic reports 62% of Claude usage is code-related.
-        AI agents are the fastest growing category."
-           │
-           ▼
-   ┌─────────────────────────────────────────────┐
-   │ Summary:  Anthropic reports 62% of Claude   │
-   │           usage is code-related...          │
-   │ Entities: [Anthropic, Claude, AI agents]    │
-   │ Topics:   [AI, code generation, agents]     │
-   │ Importance: 0.8                             │
-   └─────────────────────────────────────────────┘
-```
-
-**Supported file types (27 total):**
-
-| Category | Extensions |
-|---|---|
-| Text | `.txt`, `.md`, `.json`, `.csv`, `.log`, `.xml`, `.yaml`, `.yml` |
-| Images | `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.svg` |
-| Audio | `.mp3`, `.wav`, `.ogg`, `.flac`, `.m4a`, `.aac` |
-| Video | `.mp4`, `.webm`, `.mov`, `.avi`, `.mkv` |
-| Documents | `.pdf` |
-
-**Three ways to ingest:**
-- **File watcher**: Drop any supported file in the `./inbox` folder. The agent picks it up automatically.
-- **Dashboard upload**: Use the 📎 Upload button in the Streamlit dashboard.
-- **HTTP API**: `POST /ingest` with text content.
-
-### 2. Consolidate
-
-The **ConsolidateAgent** runs on a timer (default: every 30 minutes). Like the human brain during sleep, it:
-
-- Reviews unconsolidated memories
-- Finds connections between them
-- Generates cross-cutting insights
-- Compresses related information
-
-```
-Memory #1: "AI agents are growing fast but reliability is a challenge"
-Memory #2: "Q1 priority: reduce inference costs by 40%"
-Memory #3: "Current LLM memory approaches all have gaps"
-Memory #4: "Smart inbox idea: persistent AI memory for email"
-                   │
-                   ▼  ConsolidateAgent
-   ┌─────────────────────────────────────────────┐
-   │ Connections:                                │
-   │   #1 ↔ #3: Agent reliability needs better   │
-   │            memory architectures             │
-   │   #2 ↔ #1: Cost reduction enables scaling   │
-   │            agent deployment                 │
-   │   #3 ↔ #4: Smart inbox is an application    │
-   │            of reconstructive memory         │
-   │                                             │
-   │ Insight: "The bottleneck for next-gen AI    │
-   │  tools is the transition from static RAG    │
-   │  to dynamic memory systems"                 │
-   └─────────────────────────────────────────────┘
+claude-memory-plugin/src/
+├── .claude-plugin/
+│   └── plugin.json              # Plugin manifest (v0.2.0)
+├── hooks/
+│   ├── hooks.json               # Hook event registrations
+│   ├── lib.sh                   # Shared shell functions (venv resolution)
+│   ├── session-start.sh         # Register session + inject memories
+│   ├── session-end.sh           # Finalize session + spawn extraction
+│   ├── post-tool-use.sh         # Record tool calls to session log
+│   ├── pre-tool-use.sh          # Advisory memory warnings (PreToolUse)
+│   ├── pre-compact.sh           # Log context compaction events
+│   └── stop.sh                  # Log session stop events
+├── scripts/
+│   ├── storage.py               # SQLite layer (FTS5, WAL mode)
+│   ├── extract.py               # LLM-powered observation extraction
+│   ├── consolidate.py           # Cross-session pattern synthesis
+│   ├── query.py                 # Relevance-scored memory search
+│   ├── inject.py                # Context injection formatter
+│   ├── status.py                # Database statistics
+│   ├── forget.py                # Soft/hard observation deletion
+│   ├── gate_check.py            # Danger pattern matching for PreToolUse
+│   ├── llm_provider.py          # Multi-provider LLM abstraction
+│   └── setup.sh                 # Plugin setup (venv, deps, DB init)
+├── skills/
+│   ├── memory-query/            # /memory-query — search memories
+│   ├── memory-status/           # /memory-status — DB health stats
+│   ├── memory-consolidate/      # /memory-consolidate — manual consolidation
+│   └── memory-forget/           # /memory-forget — remove observations
+└── tests/                       # 55 tests (pytest)
 ```
 
-### 3. Query
+### How Each Hook Works
 
-Ask any question. The **QueryAgent** reads all memories and consolidation insights, then synthesizes an answer with source citations:
+| Event | Hook | What Happens |
+|-------|------|-------------|
+| **SessionStart** | `session-start.sh` | Registers session in SQLite, queries memory DB, injects relevant observations as markdown into Claude's context |
+| **PostToolUse** | `post-tool-use.sh` | Appends a JSONL event to the session log (tool name, file paths, input summary) |
+| **PreToolUse** | `pre-tool-use.sh` | Checks Bash commands for danger patterns (`git push`, `rm -rf`, etc.) and searches memory for relevant warnings about files being edited. Advisory only — never blocks |
+| **SessionEnd** | `session-end.sh` | Finalizes session, spawns background extraction process that reads the transcript, calls an LLM to distill observations, and stores them in SQLite |
+| **PreCompact** | `pre-compact.sh` | Logs context compaction event to session log |
+| **Stop** | `stop.sh` | Logs session stop event |
 
-```
-Q: "What should I focus on?"
+### Storage
 
-A: "Based on your memories, prioritize:
-   1. Ship the API by March 15 [Memory 2]
-   2. The agent reliability gap [Memory 1] could be addressed
-      by the reconstructive memory approach [Memory 3]
-   3. The smart inbox concept [Memory 4] validates the
-      market need for persistent AI memory"
-```
+SQLite with WAL mode and FTS5 full-text search. Three tables:
 
-## Quick Start
+- **observations** — Individual facts extracted from sessions (content, entities, topics, priority, importance, timestamps)
+- **consolidations** — Synthesized insights from cross-session analysis (summary, insight, connections, source observation IDs)
+- **sessions** — Session metadata (branch, working directory, timestamps)
 
-### 1. Install
+The database lives at `$CLAUDE_PROJECT_DIR/claude-memory.db` (or a hash-based path under `~/.claude/projects/`).
+
+### Memory Lifecycle
+
+1. **Extraction** — After each session, observations are extracted and stored with initial importance scores
+2. **Decay** — Importance scores decay exponentially (14-day half-life; P1 observations use 28-day half-life)
+3. **Consolidation** — When >= 3 unconsolidated observations exist, an LLM finds patterns, connections, and contradictions across sessions
+4. **Pruning** — Observations older than 30 days with importance below 0.3 are automatically removed
+
+## Setup
+
+### Prerequisites
+
+- Python 3.10+
+- [Claude Code](https://docs.anthropic.com/en/docs/claude-code) CLI
+- An LLM API key (Google, Anthropic, or OpenAI) — or use Claude Code's built-in `claude -p` mode (no extra key needed)
+
+### Install from GitHub
 
 ```bash
-git clone https://github.com/Shubhamsaboo/always-on-memory-agent.git
+# Install as a Claude Code plugin
+/plugin install https://github.com/seanGSISG/always-on-memory-agent --subdir claude-memory-plugin/src
+```
+
+### Install from local directory (development)
+
+```bash
+# Clone the repo
+git clone https://github.com/seanGSISG/always-on-memory-agent.git
 cd always-on-memory-agent
-pip install -r requirements.txt
+
+# Create venv and install dependencies
+cd claude-memory-plugin
+uv venv .venv
+source .venv/bin/activate
+uv pip install -r src/requirements.txt
+
+# Run with plugin directory
+claude --plugin-dir ./src
 ```
 
-### 2. Set your API key
+### Configure the LLM Provider
+
+The plugin needs an LLM to extract observations and run consolidation. Set one of these:
 
 ```bash
-export GOOGLE_API_KEY="your-gemini-api-key"
+# Option 1: Google Gemini (default, cheapest)
+export GOOGLE_API_KEY="your-key"
+
+# Option 2: Anthropic
+export CLAUDE_MEMORY_PROVIDER="anthropic"
+export ANTHROPIC_API_KEY="your-key"
+
+# Option 3: OpenAI
+export CLAUDE_MEMORY_PROVIDER="openai"
+export OPENAI_API_KEY="your-key"
+
+# Option 4: Claude Code pipe mode (no extra key needed, uses your Claude subscription)
+export CLAUDE_MEMORY_PROVIDER="claude"
+
+# Option 5: Local OpenAI-compatible endpoint
+export CLAUDE_MEMORY_PROVIDER="local"
+export CLAUDE_MEMORY_LOCAL_URL="http://localhost:8080"
 ```
 
-Get your API key from [Vertex AI Studio](https://vertexai.google.com/) or [Google AI Studio](https://aistudio.google.com/).
+Or create a config file at `~/.config/claude-memory/config.json`:
 
-### 3. Start the agent
+```json
+{
+  "provider": "google",
+  "model": "gemini-3.1-flash-lite-preview",
+  "fallback_to_claude": true
+}
+```
+
+When `fallback_to_claude` is `true` (default), the plugin automatically falls back to `claude -p` if no API key is found.
+
+## Usage
+
+### Automatic (zero effort)
+
+Once installed, memory works automatically:
+
+- **Session start**: Relevant memories appear as injected context (markdown heading "Project Memory")
+- **During session**: Tool calls are logged silently in the background
+- **Session end**: Observations are extracted and stored (background, ~5-10 seconds)
+- **Periodically**: Cross-session consolidation runs to synthesize insights
+
+### Slash Commands
+
+| Command | Description |
+|---------|-------------|
+| `/memory-query <topic>` | Search memories for a topic, file, or concept |
+| `/memory-status` | Show database statistics — observation counts, priority distribution, DB size |
+| `/memory-consolidate` | Manually trigger consolidation (with optional dry-run preview) |
+| `/memory-forget <query>` | Find and remove observations (soft or hard delete, with preview and confirmation) |
+
+### CLI Scripts
 
 ```bash
-python agent.py
+# Search memories
+python3 scripts/query.py "authentication"
+
+# Database health check
+python3 scripts/status.py
+
+# Run consolidation manually
+python3 scripts/consolidate.py
+
+# Preview what would be consolidated
+python3 scripts/consolidate.py --dry-run
+
+# Run consolidation in foreground with result output
+python3 scripts/consolidate.py --foreground
+
+# Run continuous consolidation (every 30 minutes)
+python3 scripts/consolidate.py --continuous 30
+
+# Preview observations to forget
+python3 scripts/forget.py --query "outdated pattern" --preview
+
+# Soft-forget (reduces importance, pruned next cycle)
+python3 scripts/forget.py --query "outdated pattern" --mode soft --confirm
+
+# Hard-forget (immediate deletion)
+python3 scripts/forget.py --query "outdated pattern" --mode hard --confirm
+
+# Initialize database
+python3 scripts/storage.py --init
 ```
 
-That's it. The agent is now running:
-- Watching `./inbox/` for new files (text, images, audio, video, PDFs)
-- Consolidating every 30 minutes
-- Serving queries at `http://localhost:8888`
+## Configuration Reference
 
-### 4. Feed it information
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CLAUDE_MEMORY_PROVIDER` | `google` | LLM provider: `google`, `anthropic`, `openai`, `local`, `claude` |
+| `CLAUDE_MEMORY_MODEL` | Provider-specific | Model for extraction/consolidation |
+| `CLAUDE_MEMORY_API_KEY` | Falls back to provider key | Universal API key override |
+| `CLAUDE_MEMORY_LOCAL_URL` | `http://localhost:8080` | Base URL for local OpenAI-compatible endpoint |
+| `CLAUDE_MEMORY_MAX_INJECT_TOKENS` | `4096` | Max tokens to inject at session start |
+| `CLAUDE_MEMORY_RETENTION_DAYS` | `30` | Auto-prune memories older than this |
+| `CLAUDE_MEMORY_DB_PATH` | Auto-derived | Override database file location |
 
-**Option A: Drop any file**
+### Default Models
+
+| Provider | Default Model |
+|----------|--------------|
+| Google | `gemini-3.1-flash-lite-preview` |
+| Anthropic | `claude-haiku-4-5-20251001` |
+| OpenAI | `gpt-4o-mini` |
+| Claude | `haiku` (via `claude -p`) |
+
+## How Relevance Scoring Works
+
+When memories are injected at session start or queried with `/memory-query`, results are ranked by a composite score:
+
+| Component | Weight | Calculation |
+|-----------|--------|-------------|
+| Recency | 30% | Linear decay over 30 days |
+| Priority | 30% | P1=1.0, P2=0.7, P3=0.4, P4=0.2 |
+| Importance | 20% | Stored importance value (decays with half-life) |
+| Topic Match | 20% | Overlap between observation topics and current git context |
+
+Consolidation insights are boosted with P1 priority and 0.8 importance for consistent high ranking.
+
+## Injected Context Format
+
+At session start, memories are organized into sections:
+
+```markdown
+# Project Memory (auto-injected)
+
+## Key Insights
+- Cross-session patterns synthesized by consolidation
+
+## Known Issues
+- P1/P2 observations about bugs, errors, failures
+
+## Recent Decisions
+- P1/P2 architectural decisions and rationale
+
+## Patterns
+- P3 code conventions, file relationships
+
+## Context
+- P4 environment details, failed approaches
+
+---
+*12 memories from 5 sessions | Query: /memory-query <topic>*
+```
+
+## Tests
+
 ```bash
-echo "Some important information" > inbox/notes.txt
-cp photo.jpg inbox/
-cp meeting.mp3 inbox/
-cp report.pdf inbox/
-# Agent auto-ingests within 5-10 seconds
+cd claude-memory-plugin
+source .venv/bin/activate
+python3 -m pytest src/tests/ -v
 ```
 
-**Option B: HTTP API**
-```bash
-curl -X POST http://localhost:8888/ingest \
-  -H "Content-Type: application/json" \
-  -d '{"text": "AI agents are the future", "source": "article"}'
-```
+55 tests covering storage, extraction, injection, consolidation, and integration.
 
-### 5. Query
+## Troubleshooting
 
-```bash
-curl "http://localhost:8888/query?q=what+do+you+know"
-```
-
-### 6. Dashboard (optional)
-
-```bash
-streamlit run dashboard.py
-# Opens at http://localhost:8501
-```
-
-The Streamlit dashboard connects to the running agent and provides a visual interface for:
-- **Ingesting** text and uploading files (images, audio, video, PDFs)
-- **Querying** memory with natural language
-- **Browsing** and **deleting** stored memories
-- **Consolidating** memories on demand
-
-## API Reference
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/status` | GET | Memory statistics (counts) |
-| `/memories` | GET | List all stored memories |
-| `/ingest` | POST | Ingest new text (`{"text": "...", "source": "..."}`) |
-| `/query?q=...` | GET | Query memory with a question |
-| `/consolidate` | POST | Trigger manual consolidation |
-| `/delete` | POST | Delete a memory (`{"memory_id": 1}`) |
-| `/clear` | POST | Delete all memories (full reset) |
-
-## CLI Options
-
-```bash
-python agent.py [options]
-
-  --watch DIR              Folder to watch (default: ./inbox)
-  --port PORT              HTTP API port (default: 8888)
-  --consolidate-every MIN  Consolidation interval (default: 30)
-```
-
-## Project Structure
-
-```
-always-on-memory-agent/
-├── agent.py          # Always-on ADK agent (the real thing)
-├── dashboard.py      # Streamlit UI (connects to agent API)
-├── requirements.txt  # Dependencies
-├── inbox/            # Drop any file here for auto-ingestion
-├── docs/             # Logo assets (Gemini, ADK)
-└── memory.db         # SQLite database (created automatically)
-```
-
-## Why Gemini 3.1 Flash-Lite?
-
-This agent runs continuously. Cost and speed matter more than raw intelligence for background processing:
-
-- **Fast**: Low-latency ingestion and retrieval, designed for continuous background operation
-- **Cheap**: Negligible cost per session, making 24/7 operation practical
-- **Smart enough**: Extracts structure, finds connections, synthesizes answers
-
-## Built With
-
-- [Google ADK](https://google.github.io/adk-docs/) (Agent Development Kit) for agent orchestration
-- [Gemini 3.1 Flash-Lite](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/models/gemini/3-1-flash-lite) for all LLM operations
-- SQLite for persistent memory storage
-- aiohttp for the HTTP API
-- Streamlit for the dashboard
+| Problem | Solution |
+|---------|----------|
+| No memories injected at session start | Complete at least one session first — extraction runs after `SessionEnd` |
+| Extraction not running | Check that your LLM API key is set, or set `CLAUDE_MEMORY_PROVIDER=claude` to use pipe mode |
+| "Another extraction/consolidation is running" | A lock file exists from a previous run — it auto-expires after 10 minutes |
+| Database locked errors | SQLite WAL mode handles most concurrency, but rapid back-to-back sessions may conflict briefly |
+| Slow session start | Injection is designed to be fast (<500ms), but a very large DB may slow queries — run `/memory-consolidate` to synthesize and prune |
 
 ## License
 
