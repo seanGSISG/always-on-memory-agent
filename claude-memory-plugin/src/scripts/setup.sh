@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+PROD_VENV_DIR="$HOME/.config/claude-memory/.venv"
+DEV_VENV_DIR="$PLUGIN_ROOT/../.venv"
+
+echo "Setting up claude-memory plugin..."
+
+# 1. Validate Python 3.10+
+python3 -c "import sys; assert sys.version_info >= (3, 10), f'Python 3.10+ required, got {sys.version}'" || {
+    echo "ERROR: Python 3.10+ is required"
+    exit 1
+}
+
+# 2. Select venv: production first, then dev fallback
+if [ -d "$PROD_VENV_DIR" ]; then
+    VENV_DIR="$PROD_VENV_DIR"
+elif [ -d "$DEV_VENV_DIR" ]; then
+    VENV_DIR="$DEV_VENV_DIR"
+else
+    # Create production venv
+    VENV_DIR="$PROD_VENV_DIR"
+    mkdir -p "$(dirname "$VENV_DIR")"
+    if command -v uv > /dev/null 2>&1; then
+        uv venv "$VENV_DIR"
+    else
+        python3 -m venv "$VENV_DIR"
+    fi
+fi
+
+# 3. Install Python dependencies into venv
+VENV_PYTHON="$VENV_DIR/bin/python3"
+if [ -f "$PLUGIN_ROOT/requirements.txt" ]; then
+    if command -v uv > /dev/null 2>&1; then
+        source "$VENV_DIR/bin/activate"
+        uv pip install --quiet -r "$PLUGIN_ROOT/requirements.txt" 2>/dev/null || true
+        deactivate 2>/dev/null || true
+    elif [ -x "$VENV_PYTHON" ]; then
+        "$VENV_PYTHON" -m pip install --quiet -r "$PLUGIN_ROOT/requirements.txt" 2>/dev/null || true
+    fi
+fi
+
+# 4. Create memory directories
+MEMORY_DIR="${CLAUDE_PROJECT_DIR:-$HOME/.claude/projects/default}/claude-memory"
+mkdir -p "$MEMORY_DIR/sessions"
+
+# 5. Initialize database
+"$VENV_PYTHON" "$PLUGIN_ROOT/scripts/storage.py" --init 2>/dev/null || \
+    python3 "$PLUGIN_ROOT/scripts/storage.py" --init
+
+echo "claude-memory plugin ready."
